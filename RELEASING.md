@@ -13,7 +13,23 @@ four native npm packages and the launcher. Versions with a prerelease suffix use
 npm's `next` tag and GitHub's prerelease flag.
 
 npm uses trusted publishing for `publish-packages.yml` in the `packages-publish`
-environment. All five packages need that publisher configured.
+environment. All five packages need that publisher configured, once, from a
+terminal that can answer npm's two-factor prompt:
+
+```sh
+for package in repo-bot repo-bot-linux-x64 repo-bot-linux-arm64 \
+    repo-bot-darwin-x64 repo-bot-darwin-arm64; do
+    npm trust github "@brokkai/$package" --file publish-packages.yml \
+        --repo BrokkAi/repo-bot --env packages-publish --allow-publish -y
+done
+npm trust list @brokkai/repo-bot
+```
+
+The `--allow-publish` permission is npm's `createPackage`, so the workflow may
+publish a package's first version: configure the publisher before the first
+tag and no version is ever published by hand. If the registry refuses a name it
+has never seen, publish that version once from a terminal with
+`bash scripts/release.sh vX.Y.Z` and configure trust afterwards.
 
 Before creating the GitHub release, packaging runs `scripts/notices.py` once.
 It collects license, notice, copying, and patent files from the selected Go
