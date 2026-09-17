@@ -1,0 +1,13 @@
+{
+  "remote": "https://github.com/OWNER/REPO.git",
+  "branch": "main",
+  "directory": "var/checkout",
+  "state_directory": "var/state",
+  "timeout": "1h",
+  "max_repairs": 3,
+  "dry_run": false,
+  "verify": [],
+  "instruction_files": ["AGENTS.md", "README.md"],
+  "agent": {"command": ["codex-acp"]},
+  "github": {"host": "github.com"}
+}
