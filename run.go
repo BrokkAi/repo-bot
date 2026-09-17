@@ -45,9 +45,9 @@ func Run(ctx context.Context, cfg Config, request Request, agent Agent, log *slo
 			return worker.Result{}, fmt.Errorf("compare branch changes: %w", err)
 		}
 	}
-	if len(request.Commits) > 0 {
+	if candidates := ancestryCandidates(inventory, request.Commits); len(candidates) > 0 {
 		report(Progress{Phase: "inventorying", Task: "Settling release ancestry"})
-		if inventory.Released, err = released(ctx, gh, inventory, request.Commits); err != nil {
+		if inventory.Released, err = released(ctx, cfg, gh, inventory, candidates); err != nil {
 			return worker.Result{}, err
 		}
 	}
@@ -61,21 +61,67 @@ func Run(ctx context.Context, cfg Config, request Request, agent Agent, log *slo
 	return worker.Result{Inventory: &inventory, Health: health}, nil
 }
 
+// ancestryCandidates is every revision whose release state this run can settle:
+// the ones Town asked about, the commits the branch just gained, and the merge
+// commits of pull requests merged into it. Proving one it did not ask for costs
+// nothing Town has to interpret.
+func ancestryCandidates(inventory Inventory, asked []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	add := func(revision string) {
+		if SHA(revision) && !seen[revision] {
+			seen[revision] = true
+			out = append(out, revision)
+		}
+	}
+	for _, revision := range asked {
+		add(revision)
+	}
+	for _, c := range inventory.Commits {
+		add(c.SHA)
+	}
+	for _, p := range inventory.Pulls {
+		if p.MergedAt != nil && p.Base.Ref == inventory.Branch {
+			add(p.MergeCommit)
+		}
+	}
+	return out
+}
+
 // released proves which of the asked-for revisions a published release already
 // contains. One comparison names everything the branch carries beyond the
 // latest release, which settles most of them without a request of their own;
 // absence from that list proves nothing on its own, so anything not named there
 // is still proven individually.
-func released(ctx context.Context, gh githubClient, inventory Inventory, candidates []string) (map[string]bool, error) {
+func released(ctx context.Context, cfg Config, gh githubClient, inventory Inventory, candidates []string) (map[string]bool, error) {
 	latest := latestRelease(inventory.Releases)
 	if latest == nil {
 		return nil, nil
 	}
+	saved, err := ReadState(cfg)
+	if err != nil {
+		return nil, err
+	}
 	pending := map[string]bool{}
-	if unreleased, usable, err := gh.unreleased(ctx, latest.Tag, inventory.Head); err == nil && usable {
-		for _, c := range unreleased {
-			if SHA(c.SHA) {
-				pending[c.SHA] = true
+	if saved == nil || saved.VainCompare != latest.Tag {
+		unreleased, usable, err := gh.unreleased(ctx, latest.Tag, inventory.Head)
+		switch {
+		case err != nil:
+			// The comparison is an optimization with its own way of saying it
+			// proved nothing, so a failure falls back to the individual proofs
+			// rather than taking the whole inventory down with it.
+		case usable:
+			for _, c := range unreleased {
+				if SHA(c.SHA) {
+					pending[c.SHA] = true
+				}
+			}
+		default:
+			// A repository that cuts releases from another branch answers
+			// "diverged" forever; paying for that on every poll adds traffic to
+			// the one case the comparison cannot help with.
+			if err := updateState(cfg, func(s *State) { s.VainCompare = latest.Tag }); err != nil {
+				return nil, err
 			}
 		}
 	}

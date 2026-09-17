@@ -86,3 +86,23 @@ class NoticesTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ToolchainFileTest(unittest.TestCase):
+    def test_finds_a_toolchain_license_beside_goroot(self):
+        with tempfile.TemporaryDirectory() as root:
+            install = Path(root)
+            goroot = install / "libexec"
+            goroot.mkdir()
+            (install / "LICENSE").write_text("go license", encoding="utf-8")
+            (goroot / "PATENTS").write_text("go patents", encoding="utf-8")
+            self.assertEqual(notices.toolchain_file(goroot, "LICENSE"), install / "LICENSE")
+            self.assertEqual(notices.toolchain_file(goroot, "PATENTS"), goroot / "PATENTS")
+
+    def test_prefers_goroot_and_reports_a_missing_file_there(self):
+        with tempfile.TemporaryDirectory() as root:
+            goroot = Path(root) / "go"
+            goroot.mkdir()
+            (goroot / "LICENSE").write_text("go license", encoding="utf-8")
+            self.assertEqual(notices.toolchain_file(goroot, "LICENSE"), goroot / "LICENSE")
+            self.assertEqual(notices.toolchain_file(goroot, "PATENTS"), goroot / "PATENTS")

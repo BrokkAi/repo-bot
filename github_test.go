@@ -2,17 +2,19 @@ package repobot
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeGitHub puts a `gh` on PATH that answers the endpoint it is given from a
 // table of shell glob patterns. An endpoint no pattern covers is an error, so a
 // test can never pass on a request nobody meant to answer.
-func fakeGitHub(t *testing.T, answers map[string]string) {
+func fakeGitHub(t *testing.T, answers map[string]string) func() []string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "brp-gh-")
 	if err != nil {
@@ -26,7 +28,8 @@ func fakeGitHub(t *testing.T, answers map[string]string) {
 	}
 	sort.Slice(patterns, func(i, j int) bool { return len(patterns[i]) > len(patterns[j]) })
 	var script strings.Builder
-	script.WriteString("#!/bin/sh\nfor endpoint; do :; done\ncase \"$endpoint\" in\n")
+	log := filepath.Join(dir, "requests.log")
+	script.WriteString("#!/bin/sh\nfor endpoint; do :; done\necho \"$endpoint\" >> " + log + "\ncase \"$endpoint\" in\n")
 	for _, pattern := range patterns {
 		script.WriteString("  " + pattern + ")\n    cat <<'JSON'\n" + answers[pattern] + "\nJSON\n    ;;\n")
 	}
@@ -36,6 +39,24 @@ func fakeGitHub(t *testing.T, answers map[string]string) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() []string {
+		body, err := os.ReadFile(log)
+		if err != nil {
+			return nil
+		}
+		return strings.Split(strings.TrimSpace(string(body)), "\n")
+	}
+}
+
+// requestsMatching counts the recorded requests whose endpoint contains match.
+func requestsMatching(requests []string, match string) int {
+	count := 0
+	for _, endpoint := range requests {
+		if strings.Contains(endpoint, match) {
+			count++
+		}
+	}
+	return count
 }
 
 const (
@@ -157,5 +178,80 @@ func TestRunReportsTheInventoryEvenWhenTheHealthDutyFails(t *testing.T) {
 	}
 	if result.Inventory == nil || result.Inventory.Head != headSHA {
 		t.Fatalf("Town's view of the repository must not depend on the health duty: %+v", result.Inventory)
+	}
+}
+
+// A first inventory of a mature repository once spawned one ancestry request
+// per merged pull request, and re-asked about every unreleased merge commit on
+// every poll.
+func TestReleaseAncestryUsesOneComparisonPerRun(t *testing.T) {
+	merged := time.Now().Add(-time.Hour)
+	pulls := make([]Pull, 0, 8)
+	for n := 1; n <= 8; n++ {
+		p := Pull{Number: n, Title: "Change", State: "closed", MergedAt: &merged, MergeCommit: fmt.Sprintf("%040x", n)}
+		p.Base.Ref = "main"
+		pulls = append(pulls, p)
+	}
+	inventory := Inventory{Branch: "main", Head: headSHA, Pulls: pulls, Releases: []Release{{Tag: "v1.0.0", At: merged}}}
+	// The comparison names the odd merge commits as unreleased; the rest are
+	// proven individually, because absence from that list proves nothing.
+	unreleased := []string{}
+	for n, p := range pulls {
+		if n%2 == 1 {
+			unreleased = append(unreleased, `{"sha":"`+p.MergeCommit+`"}`)
+		}
+	}
+	answers := map[string]string{
+		"*/compare/v1.0.0...*": `{"status":"ahead","commits":[` + strings.Join(unreleased, ",") + `]}`,
+		"*/compare/*":          `{"status":"ahead"}`,
+	}
+	requests := fakeGitHub(t, answers)
+	cfg := inventoryConfig(t)
+	got, err := released(context.Background(), cfg, githubClient{config: cfg}, inventory, ancestryCandidates(inventory, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n, p := range pulls {
+		want := n%2 == 0
+		if got[p.MergeCommit] != want {
+			t.Fatalf("merge commit for PR #%d settled as released=%t, want %t", n+1, got[p.MergeCommit], want)
+		}
+	}
+	recorded := requests()
+	if compares := requestsMatching(recorded, "/compare/v1.0.0..."); compares != 1 {
+		t.Fatalf("the run issued %d release comparisons, want one", compares)
+	}
+	if proofs := len(recorded) - 1; proofs != len(pulls)/2 {
+		t.Fatalf("the run proved %d commits individually, want only the %d the comparison could not settle", proofs, len(pulls)/2)
+	}
+}
+
+// A repository that cuts releases from a separate branch answers "diverged"
+// forever, so that comparison is not paid for on every poll.
+func TestUnusableReleaseComparisonIsNotRepeated(t *testing.T) {
+	inventory := Inventory{Branch: "main", Head: headSHA, Releases: []Release{{Tag: "v1.0.0", At: time.Now()}}}
+	requests := fakeGitHub(t, map[string]string{
+		"*/compare/v1.0.0...*": `{"status":"diverged"}`,
+		"*/compare/*":          `{"status":"behind"}`,
+	})
+	cfg := inventoryConfig(t)
+	for poll := 0; poll < 2; poll++ {
+		got, err := released(context.Background(), cfg, githubClient{config: cfg}, inventory, []string{mergedSHA})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got[mergedSHA] {
+			t.Fatal("a commit was recorded as released without proof")
+		}
+	}
+	if compares := requestsMatching(requests(), "/compare/v1.0.0..."); compares != 1 {
+		t.Fatalf("an unusable comparison was repeated %d times", compares)
+	}
+	saved, err := ReadState(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved == nil || saved.VainCompare != "v1.0.0" {
+		t.Fatalf("an unusable comparison must be remembered: %+v", saved)
 	}
 }

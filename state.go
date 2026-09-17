@@ -16,14 +16,18 @@ const stateFormat = 1
 // already spent attempts on. It exists so a poll every minute cannot start an
 // agent every minute on the same red branch.
 type State struct {
-	Format   int       `json:"format"`
-	Repo     string    `json:"repo"`
-	Branch   string    `json:"branch"`
-	Head     string    `json:"head,omitempty"`
-	Attempts int       `json:"attempts,omitempty"`
-	Pushed   string    `json:"pushed,omitempty"`
-	Failure  string    `json:"failure,omitempty"`
-	Updated  time.Time `json:"updated,omitempty"`
+	Format   int    `json:"format"`
+	Repo     string `json:"repo"`
+	Branch   string `json:"branch"`
+	Head     string `json:"head,omitempty"`
+	Attempts int    `json:"attempts,omitempty"`
+	Pushed   string `json:"pushed,omitempty"`
+	Failure  string `json:"failure,omitempty"`
+	// VainCompare is a release tag whose comparison with the branch head proved
+	// nothing. A repository that cuts releases from another branch answers that
+	// way forever, so it is not asked again for the same tag.
+	VainCompare string    `json:"vain_compare,omitempty"`
+	Updated     time.Time `json:"updated,omitempty"`
 }
 
 func statePath(cfg Config) string { return filepath.Join(cfg.StateDirectory, "repo-bot.json") }
@@ -53,6 +57,20 @@ func ReadState(cfg Config) (*State, error) {
 		return nil, fmt.Errorf("repair state belongs to %s@%s", s.Repo, s.Branch)
 	}
 	return &s, nil
+}
+
+// updateState reads, changes and saves this workspace's memory in one step, so
+// one duty's record never erases another's.
+func updateState(cfg Config, change func(*State)) error {
+	saved, err := ReadState(cfg)
+	if err != nil {
+		return err
+	}
+	if saved == nil {
+		saved = &State{}
+	}
+	change(saved)
+	return writeState(cfg, saved)
 }
 
 func writeState(cfg Config, s *State) error {

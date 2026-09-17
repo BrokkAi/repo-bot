@@ -65,13 +65,30 @@ def generate():
     toolchain = json.loads(go("env", "-json", "GOROOT", "GOVERSION"))
     goroot = Path(toolchain["GOROOT"])
     for name in ("LICENSE", "PATENTS"):
-        path = goroot / name
+        path = toolchain_file(goroot, name)
         if name == "LICENSE" or path.exists():
             sections.append(f"Go runtime and standard library {toolchain['GOVERSION']}/{name}\n\n"
                             + path.read_text(encoding="utf-8"))
     sections.append(f"Unicode data used by Go and dependencies\nSource: {UNICODE_URL}\n\n"
                     + unicode_notice())
     return ("\n" + "=" * 78 + "\n\n").join(s.rstrip() + "\n" for s in sections)
+
+
+def toolchain_file(goroot, name):
+    """Locate one Go toolchain legal file.
+
+    Most distributions keep them inside GOROOT. Homebrew installs the toolchain
+    as the formula's libexec and leaves LICENSE in the directory above it, so a
+    release built on a developer's machine must look there too rather than
+    report the toolchain license as missing.
+    """
+    path = goroot / name
+    if path.exists():
+        return path
+    beside = goroot.parent / name
+    if beside.exists():
+        return beside
+    return path
 
 
 def main():

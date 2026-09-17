@@ -56,7 +56,7 @@ func assess(ctx context.Context, cfg Config, verdict checkReader, agent Agent, h
 		// The branch is not failing, so nothing is owed on this revision and an
 		// older revision's spent budget is no longer anyone's business.
 		if saved != nil && saved.Head != "" {
-			if err := writeState(cfg, &State{}); err != nil {
+			if err := updateState(cfg, forget); err != nil {
 				return nil, err
 			}
 		}
@@ -83,13 +83,13 @@ func assess(ctx context.Context, cfg Config, verdict checkReader, agent Agent, h
 	health.Attempts = attempts
 	// The budget is spent before the agent starts. An attempt that crashes the
 	// process still cost the repository an agent run, and must not be free.
-	if err := writeState(cfg, &State{Head: head, Attempts: attempts}); err != nil {
+	if err := updateState(cfg, attempt(head, attempts, "", "")); err != nil {
 		return nil, err
 	}
 	pushed, failure := repair(ctx, cfg, checks, head, agent, log)
 	if failure != nil {
 		health.Detail = truncate(failure.Error(), 2000)
-		if err := writeState(cfg, &State{Head: head, Attempts: attempts, Failure: health.Detail}); err != nil {
+		if err := updateState(cfg, attempt(head, attempts, "", health.Detail)); err != nil {
 			return nil, err
 		}
 		if rejectedByProtection(failure) {
@@ -101,17 +101,29 @@ func assess(ctx context.Context, cfg Config, verdict checkReader, agent Agent, h
 	}
 	if pushed == "" {
 		health.Detail = "The agent left the branch unchanged; nothing was published."
-		if err := writeState(cfg, &State{Head: head, Attempts: attempts, Failure: health.Detail}); err != nil {
+		if err := updateState(cfg, attempt(head, attempts, "", health.Detail)); err != nil {
 			return nil, err
 		}
 		return health, nil
 	}
 	health.State = healthRepaired
 	health.Pushed = pushed
-	if err := writeState(cfg, &State{Head: head, Attempts: attempts, Pushed: pushed}); err != nil {
+	if err := updateState(cfg, attempt(head, attempts, pushed, "")); err != nil {
 		return nil, err
 	}
 	return health, nil
+}
+
+// forget clears what this workspace remembers about a failing revision.
+func forget(s *State) {
+	s.Head, s.Attempts, s.Pushed, s.Failure = "", 0, "", ""
+}
+
+// attempt records one repair attempt against an exact revision.
+func attempt(head string, attempts int, pushed, failure string) func(*State) {
+	return func(s *State) {
+		s.Head, s.Attempts, s.Pushed, s.Failure = head, attempts, pushed, failure
+	}
 }
 
 // repair runs one agent attempt against the exact failing revision in a private
