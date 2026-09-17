@@ -13,7 +13,13 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class ReleaseTests(unittest.TestCase):
-    def test_all_archives_and_npm_packages_include_generated_notices(self):
+    def test_stable_release_packages_include_generated_notices(self):
+        self.check_release('v0.0.0')
+
+    def test_prerelease_packages_include_generated_notices(self):
+        self.check_release('v0.0.0-test')
+
+    def check_release(self, tag):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             checkout = root / 'checkout'
@@ -55,7 +61,7 @@ elif name == 'npm':
                 path.chmod(0o755)
             env = dict(os.environ, PATH=str(mocks) + os.pathsep + os.environ['PATH'],
                        FAKE_RELEASE_OUTPUT=str(output))
-            subprocess.run(['bash', 'scripts/release.sh', 'v0.0.0-test'], cwd=checkout,
+            subprocess.run(['bash', 'scripts/release.sh', tag], cwd=checkout,
                            env=env, check=True, capture_output=True, text=True, timeout=60)
             self.assertEqual((output / 'calls').read_text().splitlines()[0], 'python3')
             archives = list(output.glob('*.tar.gz'))
@@ -70,7 +76,7 @@ elif name == 'npm':
             self.assertFalse((checkout / 'THIRD_PARTY_NOTICES.txt').exists())
             (output / 'calls').unlink()
             failed = subprocess.run(
-                ['bash', 'scripts/release.sh', 'v0.0.0-test'], cwd=checkout,
+                ['bash', 'scripts/release.sh', tag], cwd=checkout,
                 env=dict(env, FAKE_NOTICE_FAILURE='1'), capture_output=True, timeout=60)
             self.assertNotEqual(failed.returncode, 0)
             self.assertEqual((output / 'calls').read_text().splitlines(), ['python3'])

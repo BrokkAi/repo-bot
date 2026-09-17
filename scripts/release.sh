@@ -17,7 +17,7 @@ fi
 
 python3 scripts/notices.py "$dist/THIRD_PARTY_NOTICES.txt"
 
-gh release create "$tag" --repo "$repo" --verify-tag --generate-notes "${release_flags[@]}"
+gh release create "$tag" --repo "$repo" --verify-tag --generate-notes ${release_flags[@]+"${release_flags[@]}"}
 test -n "$(gh release view "$tag" --repo "$repo" --json url --jq .url)"
 
 for os in linux darwin; do
