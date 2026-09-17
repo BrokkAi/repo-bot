@@ -25,11 +25,22 @@ done
 npm trust list @brokkai/repo-bot
 ```
 
-The `--allow-publish` permission is npm's `createPackage`, so the workflow may
-publish a package's first version: configure the publisher before the first
-tag and no version is ever published by hand. If the registry refuses a name it
-has never seen, publish that version once from a terminal with
-`bash scripts/release.sh vX.Y.Z` and configure trust afterwards.
+All five packages were bootstrapped at `0.1.0` on 2026-09-17 and their trusted
+publishers were verified. `--allow-publish` enables `createPackage`; the registry
+also returned `createStagedPackage`. The registry rejected trust configuration
+for an unpublished name with `E404 Package not found`, so the first versions
+were published locally and have no provenance attestations. Future version tags
+use the configured GitHub publisher.
+
+For a new package name, try configuring trust first. If npm rejects the unknown
+name, bootstrap from an authenticated interactive terminal. Temporarily disable
+`publish-packages.yml` and verify it is disabled before pushing the version tag:
+`scripts/release.sh` requires a remote tag, and an active workflow would race the
+local release. Run `bash scripts/release.sh vX.Y.Z`, configure and verify trust
+for every package, then re-enable the workflow. Do not rerun the whole release
+script after partial success: inspect existing release assets and npm versions
+first. npm browser verification requires a TTY; press Enter and complete the
+browser flow without copying credentials or authentication URLs into logs.
 
 Before creating the GitHub release, packaging runs `scripts/notices.py` once.
 It collects license, notice, copying, and patent files from the selected Go
